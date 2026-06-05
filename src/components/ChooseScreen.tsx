@@ -9,7 +9,6 @@ type Props = {
   onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
 };
 
-// Landing screen shown before any model is loaded
 export default function ChooseScreen({ statusMessage, onUseTestFile, onFileChange }: Props) {
   return (
     <div className="entry-screen">

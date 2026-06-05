@@ -1,7 +1,6 @@
 // Root component — manages all app state and wires together the UI components
 
 import { useState, useEffect, useRef, type ChangeEvent } from "react";
-import PSD from "@webtoon/psd";
 import "./App.css";
 
 import type { Layer, ViewMode } from "./types";
@@ -12,21 +11,10 @@ import LayerControls from "./components/LayerControls";
 import LayerPicker from "./components/LayerPicker";
 import PreviewCanvas from "./components/PreviewCanvas";
 
-// Layers are rendered in array order (first = bottom). Images served from /public/test-avatar/.
-const initialLayers: Layer[] = [
-  { id: "irisL", src: "/test-avatar/irisL.png", x: 0, y: 0, offsetX: 0, offsetY: 0, rotation: 0, scale: 1, opacity: 1 },
-  { id: "irisR", src: "/test-avatar/irisR.png", x: 0, y: 0, offsetX: 0, offsetY: 0, rotation: 0, scale: 1, opacity: 1 },
-  { id: "eyeL",  src: "/test-avatar/eyeL.png",  x: 0, y: 0, offsetX: 0, offsetY: 0, rotation: 0, scale: 1, opacity: 1 },
-  { id: "eyeR",  src: "/test-avatar/eyeR.png",  x: 0, y: 0, offsetX: 0, offsetY: 0, rotation: 0, scale: 1, opacity: 1 },
-  { id: "mouth", src: "/test-avatar/mouth.png", x: 0, y: 0, offsetX: 0, offsetY: 0, rotation: 0, scale: 1, opacity: 1 },
-  { id: "head",  src: "/test-avatar/head.png",  x: 0, y: 0, offsetX: 0, offsetY: 0, rotation: 0, scale: 1, opacity: 1 },
-  { id: "neck",  src: "/test-avatar/neck.png",  x: 0, y: 0, offsetX: 0, offsetY: 0, rotation: 0, scale: 1, opacity: 1 },
-];
-
 function App() {
   const [viewMode, setViewMode]               = useState<ViewMode>("choose");
-  const [layers, setLayers]                   = useState<Layer[]>(initialLayers);
-  const [selectedLayerId, setSelectedLayerId] = useState<string>(initialLayers[0].id);
+  const [layers, setLayers]                   = useState<Layer[]>([]);
+  const [selectedLayerId, setSelectedLayerId] = useState<string>("");
   const [sourceLabel, setSourceLabel]         = useState("Provided test avatar");
   const [statusMessage, setStatusMessage]     = useState<string | null>(null);
   const [fitTransform, setFitTransform]       = useState({ scale: 1, offsetX: 0, offsetY: 0 });
@@ -48,32 +36,31 @@ function App() {
     ));
   };
 
-  // Loads layers, computes bounds, fits to preview, and switches to the given view mode
-  const applyLayersAndFit = async (newLayers: Layer[], label: string, mode: ViewMode) => {
-    const loaded = await loadLayerDimensions(newLayers);
-    const bounds = computeLayerBounds(loaded);
-    const w = previewElement?.clientWidth  || canvasSize.width  || 640;
-    const h = previewElement?.clientHeight || canvasSize.height || 640;
-    setLayers(loaded);
-    setSelectedLayerId(loaded[0].id);
-    setSourceLabel(label);
-    setFitTransform(computeFitTransform(bounds, w, h));
-    setStatusMessage(null);
-    setViewMode(mode);
-  };
-
-  // Loads the built-in test avatar and switches to the test view
+  // Loads the built-in test avatar and switches to the test view.
+  // Fetches the PSD as a Blob, converts it to a File, and reuses handlePsdFile
+  // so the exact same parsing path as user imports is used.
   const handleUseTestFile = async () => {
-    setStatusMessage("Loading test preview...");
-    await applyLayersAndFit([...initialLayers].reverse(), "Provided test avatar", "test");
+    try {
+      setStatusMessage("Loading test preview...");
+      const response = await fetch("/test-avatar/testAvatar.psd");
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      const blob = await response.blob();
+      const file = new File([blob], "testAvatar.psd", { type: "application/octet-stream" });
+      await handlePsdFile(file);
+      setSourceLabel("Provided test avatar");
+      setViewMode("test");
+    } catch (error) {
+      console.error("Failed to load test avatar:", error);
+      setStatusMessage(`Failed to load test avatar: ${error}`);
+    }
   };
 
   // Parses a user-supplied PSD file, extracts its layers, and switches to the import view
   const handlePsdFile = async (file: File) => {
     try {
       setStatusMessage("Parsing PSD file...");
-      const psd = PSD.parse(await file.arrayBuffer());
-      const { layers: imported, bounds } = await normalizePsdLayers(psd);
+      const buf = await file.arrayBuffer();
+      const { layers: imported, bounds } = normalizePsdLayers(buf);
       if (imported.length === 0) { setStatusMessage("No visible layers found in PSD."); return; }
       const w = previewElement?.clientWidth  || canvasSize.width  || 640;
       const h = previewElement?.clientHeight || canvasSize.height || 640;
@@ -126,7 +113,7 @@ function App() {
     return () => { active = false; };
   }, [viewMode, canvasSize.width, canvasSize.height, layers]);
 
-  if (viewMode === "choose") {
+  if (viewMode === "choose" || !selectedLayer) {
     return <ChooseScreen statusMessage={statusMessage} onUseTestFile={handleUseTestFile} onFileChange={handleFileChange} />;
   }
 

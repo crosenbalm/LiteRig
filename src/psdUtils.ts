@@ -1,23 +1,25 @@
 // Utilities for parsing PSD files into Layer objects
 
+import { readPsd, type Layer as PsdLayer } from "ag-psd";
 import type { Layer, Bounds } from "./types";
 
-// Composites a PSD layer's raw pixels onto a canvas and returns a PNG data URL
-const createDataUrlFromLayer = async (node: any): Promise<string> => {
-  const pixels = await node.composite(false);
+// Composites a PSD layer's canvas onto a 2D canvas and returns a PNG data URL
+const createDataUrlFromLayer = (psdLayer: PsdLayer): string | null => {
+  if (!psdLayer.canvas) return null;
   const canvas = document.createElement("canvas");
-  canvas.width = node.width;
-  canvas.height = node.height;
+  canvas.width = psdLayer.canvas.width;
+  canvas.height = psdLayer.canvas.height;
   const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Canvas not supported");
-  ctx.putImageData(new ImageData(pixels, node.width, node.height), 0, 0);
+  if (!ctx) return null;
+  ctx.drawImage(psdLayer.canvas, 0, 0);
   return canvas.toDataURL();
 };
 
-// Walks the PSD node tree and collects all visible layers with their positions.
+// Walks the PSD layer tree and collects all visible pixel layers with their positions.
 // Positions are normalized so the combined bounding box starts at (0, 0).
-// Layers are reversed so PSD stacking order maps to CSS z-order (last = on top).
-export const normalizePsdLayers = async (psd: any): Promise<{ layers: Layer[]; bounds: Bounds }> => {
+export const normalizePsdLayers = (buffer: ArrayBuffer): { layers: Layer[]; bounds: Bounds } => {
+  const psd = readPsd(buffer, { skipCompositeImageData: true, skipLinkedFilesData: true });
+
   const result: Layer[] = [];
   const bounds: Bounds = {
     minX: Number.POSITIVE_INFINITY,
@@ -26,26 +28,41 @@ export const normalizePsdLayers = async (psd: any): Promise<{ layers: Layer[]; b
     maxY: Number.NEGATIVE_INFINITY,
   };
 
-  const walk = async (node: any) => {
-    if (node.type === "Layer" && node.width > 0 && node.height > 0 && !node.isHidden) {
-      const src = await createDataUrlFromLayer(node);
-      const x = typeof node.left === "number" ? node.left : 0;
-      const y = typeof node.top === "number" ? node.top : 0;
-      // Sanitize layer name before using it as a DOM id to prevent XSS
-      const rawName = typeof node.name === "string" ? node.name : "";
-      const id = rawName.replace(/[^a-zA-Z0-9_-]/g, "_") || `layer-${result.length}`;
-      result.push({ id, src, x, y, offsetX: 0, offsetY: 0, width: node.width, height: node.height, rotation: 0, scale: 1, opacity: 1 });
+  const walk = (psdLayer: PsdLayer) => {
+    // Skip hidden layers and groups (groups have children but no canvas)
+    if (psdLayer.hidden) return;
+
+    if (psdLayer.canvas && psdLayer.left !== undefined && psdLayer.top !== undefined) {
+      const src = createDataUrlFromLayer(psdLayer);
+      if (!src) return;
+
+      const x = psdLayer.left;
+      const y = psdLayer.top;
+      const w = psdLayer.canvas.width;
+      const h = psdLayer.canvas.height;
+
+      // Sanitize layer name before using it as a DOM id to prevent XSS,
+      // then append a counter if the name is already taken to guarantee uniqueness
+      const rawName = typeof psdLayer.name === "string" ? psdLayer.name : "";
+      const baseName = rawName.replace(/[^a-zA-Z0-9_-]/g, "_") || `layer-${result.length}`;
+      const isDuplicate = result.some((l) => l.id === baseName || l.id.startsWith(`${baseName}-`));
+      const id = isDuplicate ? `${baseName}-${result.length}` : baseName;
+
+      result.push({ id, src, x, y, offsetX: 0, offsetY: 0, width: w, height: h, rotation: 0, scale: 1, opacity: 1 });
       bounds.minX = Math.min(bounds.minX, x);
       bounds.minY = Math.min(bounds.minY, y);
-      bounds.maxX = Math.max(bounds.maxX, x + node.width);
-      bounds.maxY = Math.max(bounds.maxY, y + node.height);
+      bounds.maxX = Math.max(bounds.maxX, x + w);
+      bounds.maxY = Math.max(bounds.maxY, y + h);
     }
-    if (node.children) {
-      for (const child of node.children) await walk(child);
+
+    if (psdLayer.children) {
+      for (const child of psdLayer.children) walk(child);
     }
   };
 
-  await walk(psd);
+  if (psd.children) {
+    for (const child of psd.children) walk(child);
+  }
 
   // Shift all positions so the bounding box starts at (0, 0)
   if (Number.isFinite(bounds.minX) && Number.isFinite(bounds.minY)) {
@@ -59,5 +76,5 @@ export const normalizePsdLayers = async (psd: any): Promise<{ layers: Layer[]; b
     bounds.minY = 0;
   }
 
-  return { layers: result.reverse(), bounds };
+  return { layers: result, bounds };
 };

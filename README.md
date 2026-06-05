@@ -35,7 +35,6 @@ src/
   App.tsx                   — root component: manages state and wires everything together
 ```
 
-## TODO
-- Center layer rotation & scaling
-- Add clipping layers
-- Resize & fullscreen preview window
+## PSD requirements
+- Use standard pixel layers only — adjustment layers, text layers, and smart objects are not supported
+- Save as Photoshop PSD or PSB format
